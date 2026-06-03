@@ -14,8 +14,8 @@ from datetime import datetime
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 TWITTER_API_KEY     = os.environ.get("TWITTER_API_KEY", "")
-SEARCH_QUERY        = "th18 link.clashofclans.com"
-MAX_TWEETS          = 100
+SEARCH_QUERY        = "th18"
+MAX_TWEETS          = 200
 SEEN_FILE           = "seen_links.json"
 # ───────────────────────────────────────────────────────────────────────────────
 
