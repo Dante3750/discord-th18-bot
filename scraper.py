@@ -1,26 +1,26 @@
 """
 TH18 CoC Base Link Scraper → Discord
-Searches Twitter's Latest tab for "th18", extracts only
-link.clashofclans.com URLs from tweet text, posts them to Discord.
+Uses ntscraper (no login needed) to search Twitter for "th18",
+extracts link.clashofclans.com URLs and posts them to Discord.
 """
 
-import time
 import json
 import os
 import re
+import time
 import requests
 from datetime import datetime
-from playwright.sync_api import sync_playwright
+from ntscraper import Nitter
 
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
-SEARCH_QUERY        = "th18"
-MAX_SCROLLS         = 25
+SEARCH_QUERY        = "th18 link.clashofclans.com"
+TWEET_COUNT         = 100   # how many tweets to fetch
 SEEN_FILE           = "seen_links.json"
 # ───────────────────────────────────────────────────────────────────────────────
 
 COC_LINK_PATTERN = re.compile(
-    r"https?://link\.clashofclans\.com/[^\s\"'>)]+", re.IGNORECASE
+    r"https?://link\.clashofclans\.com/[^\s\"'>)\]]+", re.IGNORECASE
 )
 
 
@@ -36,81 +36,121 @@ def save_seen(seen: set):
         json.dump(list(seen), f)
 
 
-def scrape_coc_links(query: str, max_scrolls: int) -> list:
-    search_url = f"https://twitter.com/search?q={requests.utils.quote(query)}&f=live"
+def scrape_coc_links() -> list:
     results = []
+    seen_coc = set()
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            )
-        )
-        page = context.new_page()
+    print(f"[{datetime.now():%H:%M:%S}] Searching for: {SEARCH_QUERY}")
 
-        print(f"[{datetime.now():%H:%M:%S}] Searching Twitter for: {query}")
-        page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-        time.sleep(4)
+    try:
+        scraper = Nitter(log_level=1, skip_instance_check=False)
+        tweets = scraper.get_tweets(SEARCH_QUERY, mode="term", number=TWEET_COUNT)
 
-        seen_coc = set()
+        if not tweets or "tweets" not in tweets:
+            print("  No tweets returned.")
+            return results
 
-        for i in range(max_scrolls):
-            print(f"  Scroll {i+1}/{max_scrolls}...")
-            tweets = page.query_selector_all('article[data-testid="tweet"]')
-            for tweet in tweets:
-                try:
-                    text_el = tweet.query_selector('[data-testid="tweetText"]')
-                    full_text = text_el.inner_text() if text_el else ""
-                    inner_html = tweet.inner_html()
-                    coc_links = COC_LINK_PATTERN.findall(full_text + " " + inner_html)
+        print(f"  Got {len(tweets['tweets'])} tweets")
+
+        for tweet in tweets["tweets"]:
+            try:
+                # Get tweet text
+                text = tweet.get("text", "")
+
+                # Get links from tweet links list
+                links_in_tweet = tweet.get("links", [])
+                all_text = text + " " + " ".join(links_in_tweet)
+
+                # Extract CoC links
+                coc_links = COC_LINK_PATTERN.findall(all_text)
+
+                # Also check for t.co expanded links
+                for link in links_in_tweet:
+                    if "clashofclans" in link.lower():
+                        coc_links.append(link)
+
+                if not coc_links:
+                    continue
+
+                tweet_url = tweet.get("link", "")
+                author = tweet.get("user", {}).get("name", "Unknown")
+                handle = tweet.get("user", {}).get("username", "")
+
+                for coc_link in coc_links:
+                    coc_link = coc_link.rstrip(".,)\"'")
+                    if coc_link not in seen_coc:
+                        seen_coc.add(coc_link)
+                        results.append({
+                            "coc_link": coc_link,
+                            "tweet_url": tweet_url,
+                            "author": f"{author} (@{handle})"
+                        })
+
+            except Exception as e:
+                continue
+
+    except Exception as e:
+        print(f"  Scraper error: {e}")
+        # Fallback: try searching with just the CoC link domain
+        try:
+            print("  Trying fallback search...")
+            scraper2 = Nitter(log_level=1, skip_instance_check=False)
+            tweets2 = scraper2.get_tweets("th18 clashofclans", mode="term", number=TWEET_COUNT)
+            if tweets2 and "tweets" in tweets2:
+                for tweet in tweets2["tweets"]:
+                    text = tweet.get("text", "")
+                    links_in_tweet = tweet.get("links", [])
+                    all_text = text + " " + " ".join(links_in_tweet)
+                    coc_links = COC_LINK_PATTERN.findall(all_text)
+                    for link in links_in_tweet:
+                        if "clashofclans" in link.lower():
+                            coc_links.append(link)
                     if not coc_links:
                         continue
-                    tweet_link_el = tweet.query_selector('a[href*="/status/"]')
-                    tweet_href = tweet_link_el.get_attribute("href") if tweet_link_el else ""
-                    tweet_url = ("https://twitter.com" + tweet_href) if tweet_href.startswith("/") else tweet_href
-                    author_el = tweet.query_selector('[data-testid="User-Name"] a')
-                    author = author_el.inner_text() if author_el else "Unknown"
+                    tweet_url = tweet.get("link", "")
+                    author = tweet.get("user", {}).get("name", "Unknown")
+                    handle = tweet.get("user", {}).get("username", "")
                     for coc_link in coc_links:
                         coc_link = coc_link.rstrip(".,)\"'")
                         if coc_link not in seen_coc:
                             seen_coc.add(coc_link)
                             results.append({
                                 "coc_link": coc_link,
-                                "tweet_url": tweet_url.split("?")[0],
-                                "author": author.strip()
+                                "tweet_url": tweet_url,
+                                "author": f"{author} (@{handle})"
                             })
-                except Exception:
-                    continue
+        except Exception as e2:
+            print(f"  Fallback also failed: {e2}")
 
-            page.evaluate("window.scrollBy(0, 1800)")
-            time.sleep(2)
-
-        browser.close()
-
-    print(f"  Found {len(results)} CoC base links total.")
+    print(f"  Found {len(results)} CoC base links.")
     return results
 
 
-def post_to_discord(items: list, query: str):
+def post_to_discord(items: list):
     if not items:
         print("No new CoC links to post.")
+        # Post a status message so you know it ran
+        requests.post(DISCORD_WEBHOOK_URL, json={
+            "embeds": [{
+                "title": "TH18 Scraper ran — no new links found",
+                "description": f"Ran at {datetime.now().strftime('%Y-%m-%d %H:%M')} UTC",
+                "color": 0x888888
+            }]
+        })
         return
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     header = {
         "embeds": [{
             "title": f"\U0001f3f0 TH18 Base Links \u2014 {now}",
-            "description": f"Found **{len(items)} new Clash of Clans base link(s)** from Twitter `{query}` Latest tab.",
+            "description": f"Found **{len(items)} new Clash of Clans base link(s)**",
             "color": 0xE8D44D,
-            "footer": {"text": "link.clashofclans.com links only"}
+            "footer": {"text": "th18 scraper • link.clashofclans.com"}
         }]
     }
     r = requests.post(DISCORD_WEBHOOK_URL, json=header)
     if r.status_code not in (200, 204):
-        print(f"  Discord error: {r.status_code}")
+        print(f"  Discord error: {r.status_code} {r.text}")
         return
     time.sleep(0.5)
 
@@ -129,12 +169,12 @@ def post_to_discord(items: list, query: str):
         requests.post(DISCORD_WEBHOOK_URL, json=embed)
         time.sleep(0.8)
 
-    print(f"  Posted {len(items)} CoC links to Discord.")
+    print(f"  Posted {len(items)} links to Discord.")
 
 
 def main():
     print(f"\n{'='*55}")
-    print(f"  TH18 CoC Base Scraper \u2014 {datetime.now():%Y-%m-%d %H:%M:%S}")
+    print(f"  TH18 CoC Scraper \u2014 {datetime.now():%Y-%m-%d %H:%M:%S}")
     print(f"{'='*55}")
 
     if not DISCORD_WEBHOOK_URL:
@@ -142,10 +182,10 @@ def main():
         return
 
     seen = load_seen()
-    all_items = scrape_coc_links(SEARCH_QUERY, MAX_SCROLLS)
+    all_items = scrape_coc_links()
     new_items = [item for item in all_items if item["coc_link"] not in seen]
     print(f"  New (not yet posted): {len(new_items)}")
-    post_to_discord(new_items, SEARCH_QUERY)
+    post_to_discord(new_items)
     seen.update(item["coc_link"] for item in new_items)
     save_seen(seen)
     print("  Done.\n")
