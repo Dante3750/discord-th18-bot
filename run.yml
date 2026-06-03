@@ -1,0 +1,37 @@
+name: TH18 CoC Scraper
+
+on:
+  schedule:
+    - cron: '0 9 * * *'   # runs every day at 9 AM UTC
+  workflow_dispatch:        # lets you also run it manually from GitHub
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: Run scraper
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python scraper.py
+
+      - name: Save seen links (so we don't re-post)
+        uses: actions/upload-artifact@v4
+        with:
+          name: seen-links
+          path: seen_links.json
+          if-no-files-found: ignore
