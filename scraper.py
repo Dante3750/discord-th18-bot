@@ -1,6 +1,6 @@
 """
 TH18 CoC Base Link Scraper → Discord
-Uses ntscraper (no login needed) to search Twitter for "th18",
+Uses twitterapi.io to search Twitter Latest tab for "th18",
 extracts link.clashofclans.com URLs and posts them to Discord.
 """
 
@@ -10,17 +10,17 @@ import re
 import time
 import requests
 from datetime import datetime
-from ntscraper import Nitter
 
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
+TWITTER_API_KEY     = os.environ.get("TWITTER_API_KEY", "")
 SEARCH_QUERY        = "th18 link.clashofclans.com"
-TWEET_COUNT         = 100   # how many tweets to fetch
+MAX_TWEETS          = 100
 SEEN_FILE           = "seen_links.json"
 # ───────────────────────────────────────────────────────────────────────────────
 
 COC_LINK_PATTERN = re.compile(
-    r"https?://link\.clashofclans\.com/[^\s\"'>)\]]+", re.IGNORECASE
+    r"https?://link\.clashofclans\.com/[^\s\"'>)\]\\]+", re.IGNORECASE
 )
 
 
@@ -42,97 +42,100 @@ def scrape_coc_links() -> list:
 
     print(f"[{datetime.now():%H:%M:%S}] Searching for: {SEARCH_QUERY}")
 
-    try:
-        scraper = Nitter(log_level=1, skip_instance_check=False)
-        tweets = scraper.get_tweets(SEARCH_QUERY, mode="term", number=TWEET_COUNT)
+    cursor = None
+    fetched = 0
 
-        if not tweets or "tweets" not in tweets:
-            print("  No tweets returned.")
-            return results
+    while fetched < MAX_TWEETS:
+        params = {
+            "query": SEARCH_QUERY,
+            "queryType": "Latest",
+        }
+        if cursor:
+            params["cursor"] = cursor
 
-        print(f"  Got {len(tweets['tweets'])} tweets")
-
-        for tweet in tweets["tweets"]:
-            try:
-                # Get tweet text
-                text = tweet.get("text", "")
-
-                # Get links from tweet links list
-                links_in_tweet = tweet.get("links", [])
-                all_text = text + " " + " ".join(links_in_tweet)
-
-                # Extract CoC links
-                coc_links = COC_LINK_PATTERN.findall(all_text)
-
-                # Also check for t.co expanded links
-                for link in links_in_tweet:
-                    if "clashofclans" in link.lower():
-                        coc_links.append(link)
-
-                if not coc_links:
-                    continue
-
-                tweet_url = tweet.get("link", "")
-                author = tweet.get("user", {}).get("name", "Unknown")
-                handle = tweet.get("user", {}).get("username", "")
-
-                for coc_link in coc_links:
-                    coc_link = coc_link.rstrip(".,)\"'")
-                    if coc_link not in seen_coc:
-                        seen_coc.add(coc_link)
-                        results.append({
-                            "coc_link": coc_link,
-                            "tweet_url": tweet_url,
-                            "author": f"{author} (@{handle})"
-                        })
-
-            except Exception as e:
-                continue
-
-    except Exception as e:
-        print(f"  Scraper error: {e}")
-        # Fallback: try searching with just the CoC link domain
         try:
-            print("  Trying fallback search...")
-            scraper2 = Nitter(log_level=1, skip_instance_check=False)
-            tweets2 = scraper2.get_tweets("th18 clashofclans", mode="term", number=TWEET_COUNT)
-            if tweets2 and "tweets" in tweets2:
-                for tweet in tweets2["tweets"]:
+            r = requests.get(
+                "https://api.twitterapi.io/twitter/tweet/advanced_search",
+                headers={"X-API-Key": TWITTER_API_KEY},
+                params=params,
+                timeout=15
+            )
+
+            if r.status_code != 200:
+                print(f"  API error: {r.status_code} — {r.text}")
+                break
+
+            data = r.json()
+            tweets = data.get("tweets", [])
+
+            if not tweets:
+                print("  No more tweets.")
+                break
+
+            print(f"  Got {len(tweets)} tweets (total so far: {fetched + len(tweets)})")
+
+            for tweet in tweets:
+                try:
                     text = tweet.get("text", "")
-                    links_in_tweet = tweet.get("links", [])
-                    all_text = text + " " + " ".join(links_in_tweet)
+
+                    # Get expanded URLs
+                    expanded_urls = []
+                    for url_obj in tweet.get("entities", {}).get("urls", []):
+                        exp = url_obj.get("expanded_url", "")
+                        if exp:
+                            expanded_urls.append(exp)
+
+                    all_text = text + " " + " ".join(expanded_urls)
                     coc_links = COC_LINK_PATTERN.findall(all_text)
-                    for link in links_in_tweet:
-                        if "clashofclans" in link.lower():
-                            coc_links.append(link)
+
+                    # Also check expanded URLs directly
+                    for u in expanded_urls:
+                        if "clashofclans" in u.lower() and u not in coc_links:
+                            coc_links.append(u)
+
                     if not coc_links:
                         continue
-                    tweet_url = tweet.get("link", "")
-                    author = tweet.get("user", {}).get("name", "Unknown")
-                    handle = tweet.get("user", {}).get("username", "")
+
+                    author = tweet.get("author", {})
+                    screen_name = author.get("userName", "unknown")
+                    name = author.get("name", "Unknown")
+                    tweet_id = tweet.get("id", "")
+                    tweet_url = f"https://x.com/{screen_name}/status/{tweet_id}"
+
                     for coc_link in coc_links:
-                        coc_link = coc_link.rstrip(".,)\"'")
+                        coc_link = coc_link.rstrip(".,)\"'\\")
                         if coc_link not in seen_coc:
                             seen_coc.add(coc_link)
                             results.append({
                                 "coc_link": coc_link,
                                 "tweet_url": tweet_url,
-                                "author": f"{author} (@{handle})"
+                                "author": f"{name} (@{screen_name})"
                             })
-        except Exception as e2:
-            print(f"  Fallback also failed: {e2}")
 
-    print(f"  Found {len(results)} CoC base links.")
+                except Exception:
+                    continue
+
+            fetched += len(tweets)
+            cursor = data.get("next_cursor")
+            if not cursor:
+                break
+
+            time.sleep(1)
+
+        except Exception as e:
+            print(f"  Request error: {e}")
+            break
+
+    print(f"  Found {len(results)} CoC base links total.")
     return results
 
 
 def post_to_discord(items: list):
     if not items:
         print("No new CoC links to post.")
-        # Post a status message so you know it ran
         requests.post(DISCORD_WEBHOOK_URL, json={
             "embeds": [{
-                "title": "TH18 Scraper ran — no new links found",
+                "title": "TH18 Scraper ran — no new CoC links found",
                 "description": f"Ran at {datetime.now().strftime('%Y-%m-%d %H:%M')} UTC",
                 "color": 0x888888
             }]
@@ -140,22 +143,18 @@ def post_to_discord(items: list):
         return
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    header = {
+    requests.post(DISCORD_WEBHOOK_URL, json={
         "embeds": [{
             "title": f"\U0001f3f0 TH18 Base Links \u2014 {now}",
             "description": f"Found **{len(items)} new Clash of Clans base link(s)**",
             "color": 0xE8D44D,
-            "footer": {"text": "th18 scraper • link.clashofclans.com"}
+            "footer": {"text": "th18 scraper \u2022 link.clashofclans.com"}
         }]
-    }
-    r = requests.post(DISCORD_WEBHOOK_URL, json=header)
-    if r.status_code not in (200, 204):
-        print(f"  Discord error: {r.status_code} {r.text}")
-        return
+    })
     time.sleep(0.5)
 
     for item in items:
-        embed = {
+        requests.post(DISCORD_WEBHOOK_URL, json={
             "embeds": [{
                 "description": (
                     f"**Posted by:** {item['author']}\n"
@@ -165,8 +164,7 @@ def post_to_discord(items: list):
                 ),
                 "color": 0x2ECC71,
             }]
-        }
-        requests.post(DISCORD_WEBHOOK_URL, json=embed)
+        })
         time.sleep(0.8)
 
     print(f"  Posted {len(items)} links to Discord.")
@@ -179,6 +177,9 @@ def main():
 
     if not DISCORD_WEBHOOK_URL:
         print("DISCORD_WEBHOOK_URL not set!")
+        return
+    if not TWITTER_API_KEY:
+        print("TWITTER_API_KEY not set!")
         return
 
     seen = load_seen()
