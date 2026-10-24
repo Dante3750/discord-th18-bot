@@ -45,9 +45,9 @@ def main() -> int:
     require_image = os.environ.get("REQUIRE_IMAGE", "1") != "0"
 
     if not api_key:
-        print("TWITTER_API_KEY not set"); return 1
+        fail("TWITTER_API_KEY secret is not set"); return 1
     if not webhook and not dry_run:
-        print("DISCORD_WEBHOOK_URL not set"); return 1
+        fail("DISCORD_WEBHOOK_URL secret is not set"); return 1
 
     state = store.load_state()
     seen = set(state["seen"])
@@ -77,6 +77,13 @@ def main() -> int:
     return 0
 
 
+def fail(msg):
+    """Error shown on the GitHub run page (and emailed to the repo owner as a failed run)."""
+    print(msg)
+    if os.environ.get("GITHUB_ACTIONS"):
+        print(f"::error title=TH18 scraper::{msg}")
+
+
 def summary(msg):
     """One-line result, shown on the GitHub run page."""
     print(msg)
@@ -85,4 +92,8 @@ def summary(msg):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as e:
+        fail(f"{type(e).__name__}: {e}"[:900])
+        raise
