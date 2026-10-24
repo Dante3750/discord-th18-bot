@@ -66,6 +66,23 @@ def _created_at_iso(raw):
     return None
 
 
+TAG_PATTERNS = {
+    "war": r"\bwar\b|\bcwl\b",
+    "cwl": r"\bcwl\b|clan war league",
+    "legend": r"\blegends?\b",
+    "anti-3-star": r"anti[\s-]*3|anti[\s-]*three",
+    "anti-2-star": r"anti[\s-]*2|anti[\s-]*two",
+    "farming": r"\bfarm(ing)?\b",
+    "trophy": r"\btroph(y|ies)\b|\bpush(ing)?\b",
+    "hybrid": r"\bhybrid\b",
+}
+
+
+def tags_from_text(text: str) -> list:
+    low = (text or "").lower()
+    return [tag for tag, pat in TAG_PATTERNS.items() if re.search(pat, low)]
+
+
 def bases_from_tweet(tweet: dict, levels: set, require_image: bool = True) -> list:
     """All distinct base layouts in one tweet whose level is in `levels` (e.g. {"TH18"}).
 
@@ -114,6 +131,7 @@ def bases_from_tweet(tweet: dict, levels: set, require_image: bool = True) -> li
             "author_name": author.get("name") or handle,
             "author_handle": handle,
             "text": (tweet.get("text") or "")[:280],
+            "tags": tags_from_text(tweet.get("text")),
             "likes": tweet.get("likeCount") or 0,
             "created_at": _created_at_iso(tweet.get("createdAt")),
         })

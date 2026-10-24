@@ -1,0 +1,43 @@
+name: Add base manually
+
+on:
+  workflow_dispatch:
+    inputs:
+      link:
+        description: 'Base copy link (link.clashofclans.com/...)'
+        required: true
+      image_url:
+        description: 'Picture of the base (URL) - needed for screenshot search'
+        required: false
+      note:
+        description: 'Note / tags (e.g. "anti 3 star war base")'
+        required: false
+      by:
+        description: 'Shown as the author'
+        default: 'Dante'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: th18-data
+  cancel-in-progress: false
+
+jobs:
+  add:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Add
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          LINK: ${{ inputs.link }}
+          IMAGE_URL: ${{ inputs.image_url }}
+          NOTE: ${{ inputs.note }}
+          BY: ${{ inputs.by }}
+        run: python add.py "$LINK" --image "$IMAGE_URL" --note "$NOTE" --by "$BY"
+      - uses: ./.github/actions/save-data
+        with:
+          message: 'data: manual base [skip ci]'

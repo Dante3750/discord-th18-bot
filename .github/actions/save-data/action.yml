@@ -1,0 +1,19 @@
+name: Save data
+description: Commit data/ (state, feed, catalog) back to the repo if it changed
+inputs:
+  message:
+    default: 'data: update bases [skip ci]'
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        MSG: ${{ inputs.message }}
+      run: |
+        git config user.name  "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add data/
+        if git diff --cached --quiet; then echo "no changes"; exit 0; fi
+        git commit -m "$MSG"
+        git pull --rebase origin "${GITHUB_REF_NAME}"
+        git push

@@ -13,6 +13,7 @@ Env vars:
   SEARCH_QUERY         override the default search query
   MAX_PAGES            default 5 (safety cap on credits per run)
   REQUIRE_IMAGE        default 1 (skip tweets with a link but no picture; 0 = keep them)
+  VISION               default 1 (0 = skip the AI model; picture hashes still saved)
   DRY_RUN=1            print what would be posted, change nothing
 """
 
@@ -20,7 +21,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 
-from th18bot import discord, store
+from th18bot import pipeline, store, vision
 from th18bot.parse import bases_from_tweet
 from th18bot.twitter import search_new_tweets
 
@@ -68,19 +69,9 @@ def main() -> int:
             print(f"  {b['level']}  @{b['author_handle']}  {b['link']}")
         return 0
 
-    posted = []
-    try:
-        for group in discord.chunks(fresh):
-            discord.send_message(webhook, [discord.build_embed(b) for b in group])
-            posted += group
-    finally:
-        # Save progress even if Discord failed halfway, so nothing gets posted twice.
-        state["seen"] += [b["layout_id"] for b in posted]
-        if len(posted) == len(fresh) and tweets:
-            state["last_tweet_id"] = max(int(t["id"]) for t in tweets)
-        store.save_state(state)
-        if posted:
-            store.append_feed(posted)
+    records = pipeline.fingerprint_all(fresh, vision.make_embedder(os.environ.get("VISION", "1") != "0"))
+    last_id = max(int(t["id"]) for t in tweets) if tweets else None
+    posted = pipeline.publish(fresh, webhook, state, records, last_tweet_id=last_id)
     print(f"posted: {len(posted)}")
     return 0
 

@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import scraper
+import scraper  # noqa
 from th18bot import discord, store, twitter
 from th18bot.parse import bases_from_tweet, layout_from_link
 

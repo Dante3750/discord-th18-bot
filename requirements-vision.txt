@@ -1,0 +1,2 @@
+# AI similarity (step B). torch is installed separately from the CPU-only index (much smaller).
+transformers>=4.40

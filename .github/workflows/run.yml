@@ -11,43 +11,28 @@ on:
         default: false
 
 permissions:
-  contents: write   # lets the job commit data/state.json + data/bases.json back
+  contents: write   # lets the job commit data/ back
 
 concurrency:
-  group: th18-scraper
+  group: th18-data   # shared with Add base, so two jobs never write data/ at once
   cancel-in-progress: false
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-
-      - run: pip install -r requirements.txt pytest
-
+      - uses: ./.github/actions/setup
       - name: Tests
         run: python -m pytest -q
-
       - name: Run scraper
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
         run: python scraper.py
-
-      - name: Save state back to repo
-        if: always() && inputs.dry_run != true
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/
-          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "data: new TH18 bases [skip ci]"
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push
+      - if: always() && inputs.dry_run != true
+        uses: ./.github/actions/save-data
+        with:
+          message: 'data: new TH18 bases [skip ci]'
