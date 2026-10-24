@@ -10,10 +10,10 @@ Finds fresh **Town Hall 18** base layouts posted on X/Twitter and drops them in 
 - **Never repost:** a layout is posted once, even if reposted with another language link.
 - **Tags:** `war`, `cwl`, `legend`, `anti-3-star`, `anti-2-star`, `farming`, `trophy`, `hybrid` from the tweet text.
 - **Reused-picture flag:** if a "new" base uses a picture we already have under a different layout, the post says so.
-- **Screenshot search:**
-  - *Same picture* (resized/recompressed/cropped a bit): perceptual hash, near-certain match.
-  - *Different screenshot of the same base*: AI similarity with Meta's DINOv2-small model (free, CPU).
-  - Nothing close: "No matching base found".
+- **Screenshot search (3 stages):**
+  1. *Same picture* (resized/recompressed/cropped a bit): perceptual hash.
+  2. *Different screenshot of the same base*: Meta's DINOv2-small makes a shortlist, then each candidate is **confirmed by lining up the layout** (SIFT keypoints + RANSAC). Clash's camera never rotates, so the same base lines up hundreds of points; a different base lines up almost none (CI: 538 vs 0). DINOv2 alone can't tell Clash bases apart, so it never decides on its own.
+  3. Shortlisted but not confirmed: shown as "looks similar, not confirmed". Nothing at all: "No matching base found".
 
 ## Buttons (Actions tab -> pick a workflow -> Run workflow)
 
