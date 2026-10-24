@@ -7,7 +7,7 @@ import add
 import find
 import scraper
 from conftest import TinyEmbedder, fake_base_image, jpeg_bytes
-from th18bot import catalog, discord, pipeline, store, vision
+from th18bot import catalog, discord, pipeline, store, verify, vision
 
 LINK = "https://link.clashofclans.com/en?action=OpenLayout&id=TH18%3AHV%3A{}"
 
@@ -40,17 +40,53 @@ def test_find_same_picture_similar_and_not_found(tmp_path):
     r = find.find(str(jpeg), emb)
     assert r["same_picture"][0]["link"] == LINK.format("B1")
 
-    # 2. same base, different-looking screenshot (darker + brighter) -> found by AI similarity
-    shot = ImageEnhance.Brightness(fake_base_image("https://img/2.jpg")).enhance(0.6)
-    q = vision.fingerprint(shot, emb)
-    q["phash"] = "0" * 16  # force the hash to miss so only the embedding can find it
-    r = catalog.Index(catalog.load()).search(q)
-    assert r["same_picture"] == [] and r["similar"][0]["link"] == LINK.format("B2")
-
-    # 3. unknown base -> nothing
+    # 2. unknown base -> nothing
     r = find.find("https://img/never-seen.jpg", emb)
-    assert r == {"same_picture": [], "similar": []}
+    assert r["same_picture"] == [] and r["same_base"] == []
     assert discord.build_find_embed(None, r)["title"] == "No matching base found"
+
+
+class AllLookAlike:
+    """Worst case for the AI shortlist (what CI showed with the real model): every base scores ~1."""
+    model_id = "all-alike"
+
+    def __call__(self, img):
+        return vision.normalize(np.ones(8, dtype=np.float32))
+
+
+def reshoot(img):
+    """Same base, new screenshot: panned, zoomed in, darker."""
+    w, h = img.size
+    return ImageEnhance.Brightness(img.crop((60, 40, w - 140, h - 60)).resize((1280, 720))).enhance(0.75)
+
+
+def test_layout_check_picks_the_right_base_even_when_ai_thinks_all_look_alike(tmp_path):
+    emb = AllLookAlike()
+    known = [base(n, f"https://img/{n}.jpg") for n in range(6)]
+    catalog.append(pipeline.fingerprint_all(known, emb).values())
+
+    shot = tmp_path / "my_screenshot.jpg"
+    shot.write_bytes(jpeg_bytes(reshoot(fake_base_image("https://img/4.jpg")), quality=70))
+    r = find.find(str(shot), emb)
+    assert r["same_picture"] == []                         # not the same picture...
+    assert [m["link"] for m in r["same_base"]] == [LINK.format("B4")]  # ...but the same base, and only that one
+    assert r["same_base"][0]["points"] >= verify.SAME_BASE_INLIERS
+    assert all(m["points"] < verify.SAME_BASE_INLIERS for m in r["maybe"])
+    assert "Same base" in discord.build_find_embed(None, r)["description"]
+
+    # a base we don't have: shortlisted by the AI, but nothing lines up -> not found
+    stranger = tmp_path / "other.jpg"
+    stranger.write_bytes(jpeg_bytes(reshoot(fake_base_image("https://img/unknown.jpg"))))
+    r = find.find(str(stranger), emb)
+    assert r["same_base"] == [] and len(r["maybe"]) == 3
+    e = discord.build_find_embed(None, r)
+    assert e["title"] == "No matching base found" and "not confirmed" in e["description"]
+
+
+def test_verify_scores():
+    a = fake_base_image("v-a")
+    assert verify.inliers(a, reshoot(a)) >= verify.SAME_BASE_INLIERS
+    assert verify.inliers(a, fake_base_image("v-b")) < verify.SAME_BASE_INLIERS
 
 
 def test_reused_picture_is_flagged(monkeypatch):

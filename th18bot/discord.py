@@ -44,12 +44,15 @@ def build_find_embed(query_image_url, result) -> dict:
     lines = []
     for m in result["same_picture"]:
         lines.append(f"✅ **Same picture** — [{m['level']} copy link]({m['link']}) · [tweet]({m['tweet_url']})")
-    for m in result["similar"]:
-        lines.append(f"\U0001f50e Looks similar ({int(m['score'] * 100)}%) — [{m['level']} copy link]({m['link']}) · [tweet]({m['tweet_url']})")
+    for m in result.get("same_base", []):
+        lines.append(f"✅ **Same base** ({m['points']} points line up) — [{m['level']} copy link]({m['link']}) · [tweet]({m['tweet_url']})")
     found = bool(lines)
+    if not found:
+        for m in result.get("maybe", []):
+            lines.append(f"\U0001f50e Looks similar, not confirmed — [{m['level']} copy link]({m['link']})")
     embed = {
         "title": "Base found" if found else "No matching base found",
-        "description": "\n".join(lines) if found else "This base isn't in the collection yet.",
+        "description": "\n".join(lines) if lines else "This base isn't in the collection yet.",
         "color": 0x2ECC71 if found else 0x888888,
     }
     if query_image_url:

@@ -13,7 +13,7 @@ from th18bot import vision
 
 CATALOG_FILE = os.path.join("data", "catalog.jsonl")
 SAME_PICTURE_BITS = 10   # phash distance <= this -> same picture (resized/recompressed/cropped a bit)
-SIMILAR_SCORE = 0.80     # embedding cosine >= this -> probably the same layout (tune with real data)
+SHORTLIST_SCORE = 0.50   # embedding cosine >= this -> worth a geometric check (verify.py decides)
 
 
 def load(path=CATALOG_FILE) -> list:
@@ -49,17 +49,22 @@ class Index:
     def __init__(self, records):
         self.records = records
         self.hash_rows = []   # (phash, record index)
-        emb_rows, self.emb_owner = [], []
+        emb_rows, self.emb_owner, self.emb_img = [], [], []
         for i, rec in enumerate(records):
             for p in rec.get("prints") or []:
                 self.hash_rows.append((p["phash"], i))
                 if p.get("emb"):
                     emb_rows.append(vision.decode_vec(p["emb"]))
                     self.emb_owner.append(i)
+                    self.emb_img.append(p["img"])
         self.emb = np.stack(emb_rows) if emb_rows else np.zeros((0, 1), dtype=np.float32)
 
-    def search(self, img_print: dict, top_k=5, exclude_layout=None) -> dict:
-        """{"same_picture": [...], "similar": [...]} best first, one entry per layout."""
+    def search(self, img_print: dict, top_k=5, exclude_layout=None, min_score=SHORTLIST_SCORE) -> dict:
+        """{"same_picture": [...], "similar": [...]} best first, one entry per layout.
+
+        "similar" is only a shortlist: all Clash bases look alike to a global embedding,
+        so callers confirm candidates with verify.inliers() before calling it a match.
+        """
         same = {}
         for h, i in self.hash_rows:
             d = vision.hamming(img_print["phash"], h)
@@ -77,10 +82,10 @@ class Index:
                 for row in np.argsort(-scores):
                     i = self.emb_owner[row]
                     lay = self.records[i]["layout_id"]
-                    if scores[row] < SIMILAR_SCORE or len(best) >= top_k:
+                    if scores[row] < min_score or len(best) >= top_k:
                         break
                     if lay != exclude_layout and lay not in best and lay not in same:
-                        best[lay] = {"score": round(float(scores[row]), 3), **self._public(i)}
+                        best[lay] = {"score": round(float(scores[row]), 3), **self._public(i), "img": self.emb_img[row]}
                 similar = list(best.values())
         return {"same_picture": same_list, "similar": similar}
 

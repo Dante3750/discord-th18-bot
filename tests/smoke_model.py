@@ -1,6 +1,8 @@
 """Downloads the real DINOv2 model and checks it can tell bases apart. Run in CI (needs internet).
 
-Pass = a re-shot of the same base scores clearly higher than a different base.
+Pass = the model loads and runs on CPU, and the layout check (verify.py) separates a re-shot of
+the same base from a different base. The DINOv2 scores are reported, not asserted: a global
+embedding can't tell Clash bases apart on its own; it only builds the shortlist.
 Results are also emitted as GitHub annotations (::notice:: / ::error::) so they show on the PR.
 """
 
@@ -15,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from conftest import fake_base_image  # noqa: E402
-from th18bot import vision  # noqa: E402
+from th18bot import verify, vision  # noqa: E402
 
 
 def report(kind, msg):
@@ -42,7 +44,9 @@ def main():
     report("notice", f"DINOv2 ok: vector {va.shape[0]}, load+3 imgs {load_s:.1f}s, {per_image * 1000:.0f} ms/img, "
                      f"same-base {same:.3f} vs different-base {diff:.3f}")
     assert va.shape[0] == 768, f"unexpected vector size {va.shape[0]}"
-    assert same > diff + 0.05, f"can't separate same ({same:.3f}) vs different ({diff:.3f})"
+    p_same, p_diff = verify.inliers(a, a_reshot), verify.inliers(a, b)
+    report("notice", f"layout check: same base {p_same} points, different base {p_diff} (need {verify.SAME_BASE_INLIERS})")
+    assert p_same >= verify.SAME_BASE_INLIERS > p_diff, "layout check can't separate bases"
 
 
 if __name__ == "__main__":
