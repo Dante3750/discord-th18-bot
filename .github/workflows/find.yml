@@ -1,0 +1,24 @@
+name: Find base from screenshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_url:
+        description: 'Screenshot image URL (e.g. right-click image in Discord -> Copy link)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  find:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Search
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          IMAGE_URL: ${{ inputs.image_url }}
+        run: python find.py "$IMAGE_URL" --discord

@@ -1,1 +1,5 @@
 requests
+Pillow
+imagehash
+numpy
+opencv-python-headless

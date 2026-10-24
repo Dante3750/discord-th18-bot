@@ -2,34 +2,37 @@ name: TH18 CoC Scraper
 
 on:
   schedule:
-    - cron: '0 9 * * *'
+    - cron: '17 */6 * * *'   # every 6 hours (UTC), off the busy :00 minute
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (search only, post nothing, save nothing)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # lets the job commit data/ back
+
+concurrency:
+  group: th18-data   # shared with Add base, so two jobs never write data/ at once
+  cancel-in-progress: false
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 20
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Tests
+        run: python -m pytest -q
       - name: Run scraper
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
         run: python scraper.py
-
-      - name: Save seen links
-        uses: actions/upload-artifact@v4
+      - if: always() && inputs.dry_run != true
+        uses: ./.github/actions/save-data
         with:
-          name: seen-links
-          path: seen_links.json
-          if-no-files-found: ignore
+          message: 'data: new TH18 bases [skip ci]'

@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Unit tests
+        run: python -m pytest -q
+      - name: Real DINOv2 model check
+        run: python tests/smoke_model.py

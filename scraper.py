@@ -1,196 +1,88 @@
 """
-TH18 CoC Base Link Scraper → Discord
-Uses twitterapi.io to search Twitter Latest tab for "th18",
-extracts link.clashofclans.com URLs and posts them to Discord.
+TH18 CoC Base Finder -> Discord (+ data/bases.json feed)
+
+1. Search X/Twitter (twitterapi.io) for new tweets with a link.clashofclans.com layout link.
+2. Keep only links whose layout id really is TH18 (read from the link, not the tweet text).
+3. Post bases never posted before to Discord, 10 per message, with the tweet's image.
+4. Save state + feed under data/ (the GitHub workflow commits them back to the repo).
+
+Env vars:
+  TWITTER_API_KEY      required
+  DISCORD_WEBHOOK_URL  required unless DRY_RUN=1
+  TH_LEVELS            default "TH18"  (comma list, e.g. "TH18,TH17")
+  SEARCH_QUERY         override the default search query
+  MAX_PAGES            default 5 (safety cap on credits per run)
+  REQUIRE_IMAGE        default 1 (skip tweets with a link but no picture; 0 = keep them)
+  VISION               default 1 (0 = skip the AI model; picture hashes still saved)
+  DRY_RUN=1            print what would be posted, change nothing
 """
 
-import json
 import os
-import re
-import time
-import requests
-from datetime import datetime
+import sys
+from datetime import datetime, timedelta, timezone
 
-# ─── CONFIG ────────────────────────────────────────────────────────────────────
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
-TWITTER_API_KEY     = os.environ.get("TWITTER_API_KEY", "")
-SEARCH_QUERY        = "th18"
-MAX_TWEETS          = 200
-SEEN_FILE           = "seen_links.json"
-# ───────────────────────────────────────────────────────────────────────────────
-
-COC_LINK_PATTERN = re.compile(
-    r"https?://link\.clashofclans\.com/[^\s\"'>)\]\\]+", re.IGNORECASE
-)
+from th18bot import pipeline, store, vision
+from th18bot.parse import bases_from_tweet
+from th18bot.twitter import search_new_tweets
 
 
-def load_seen() -> set:
-    if os.path.exists(SEEN_FILE):
-        with open(SEEN_FILE) as f:
-            return set(json.load(f))
-    return set()
+def default_query(levels):
+    words = []
+    for level in levels:
+        n = level[2:]
+        words += [level.lower(), f'"th {n}"', f"#{level.lower()}", f'"town hall {n}"']
+    since = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
+    return f"({' OR '.join(words)}) url:link.clashofclans.com filter:images -filter:retweets since:{since}"
 
 
-def save_seen(seen: set):
-    with open(SEEN_FILE, "w") as f:
-        json.dump(list(seen), f)
+def main() -> int:
+    api_key = os.environ.get("TWITTER_API_KEY", "")
+    webhook = os.environ.get("DISCORD_WEBHOOK_URL", "")
+    dry_run = os.environ.get("DRY_RUN") == "1"
+    levels = {s.strip().upper() for s in os.environ.get("TH_LEVELS", "TH18").split(",") if s.strip()}
+    query = os.environ.get("SEARCH_QUERY") or default_query(sorted(levels))
+    max_pages = int(os.environ.get("MAX_PAGES", "5"))
+    require_image = os.environ.get("REQUIRE_IMAGE", "1") != "0"
+
+    if not api_key:
+        print("TWITTER_API_KEY not set"); return 1
+    if not webhook and not dry_run:
+        print("DISCORD_WEBHOOK_URL not set"); return 1
+
+    state = store.load_state()
+    seen = set(state["seen"])
+    print(f"query: {query}\nlast tweet id: {state['last_tweet_id']}  known layouts: {len(seen)}")
+
+    tweets = search_new_tweets(api_key, query, stop_at_id=state["last_tweet_id"], max_pages=max_pages)
+    print(f"new tweets: {len(tweets)}  (~{max(15, len(tweets) * 15)} credits)")
+
+    fresh, batch_ids = [], set()
+    for tweet in reversed(tweets):  # oldest first, so the newest base ends up at the bottom in Discord
+        for base in bases_from_tweet(tweet, levels, require_image=require_image):
+            if base["layout_id"] not in seen and base["layout_id"] not in batch_ids:
+                batch_ids.add(base["layout_id"])
+                fresh.append(base)
+    print(f"new {'/'.join(sorted(levels))} bases: {len(fresh)}")
+
+    if dry_run:
+        for b in fresh:
+            print(f"  {b['level']}  @{b['author_handle']}  {b['link']}")
+        summary(f"Dry run: {len(tweets)} new tweets, {len(fresh)} new bases would be posted")
+        return 0
+
+    records = pipeline.fingerprint_all(fresh, vision.make_embedder(os.environ.get("VISION", "1") != "0"))
+    last_id = max(int(t["id"]) for t in tweets) if tweets else None
+    posted = pipeline.publish(fresh, webhook, state, records, last_tweet_id=last_id)
+    summary(f"{len(tweets)} new tweets, posted {len(posted)} new bases")
+    return 0
 
 
-def scrape_coc_links() -> list:
-    results = []
-    seen_coc = set()
-
-    print(f"[{datetime.now():%H:%M:%S}] Searching for: {SEARCH_QUERY}")
-
-    cursor = None
-    fetched = 0
-
-    while fetched < MAX_TWEETS:
-        params = {
-            "query": SEARCH_QUERY,
-            "queryType": "Latest",
-        }
-        if cursor:
-            params["cursor"] = cursor
-
-        try:
-            r = requests.get(
-                "https://api.twitterapi.io/twitter/tweet/advanced_search",
-                headers={"X-API-Key": TWITTER_API_KEY},
-                params=params,
-                timeout=15
-            )
-
-            if r.status_code != 200:
-                print(f"  API error: {r.status_code} — {r.text}")
-                break
-
-            data = r.json()
-            tweets = data.get("tweets", [])
-
-            if not tweets:
-                print("  No more tweets.")
-                break
-
-            print(f"  Got {len(tweets)} tweets (total so far: {fetched + len(tweets)})")
-
-            for tweet in tweets:
-                try:
-                    text = tweet.get("text", "")
-
-                    # Get expanded URLs
-                    expanded_urls = []
-                    for url_obj in tweet.get("entities", {}).get("urls", []):
-                        exp = url_obj.get("expanded_url", "")
-                        if exp:
-                            expanded_urls.append(exp)
-
-                    all_text = text + " " + " ".join(expanded_urls)
-                    coc_links = COC_LINK_PATTERN.findall(all_text)
-
-                    # Also check expanded URLs directly
-                    for u in expanded_urls:
-                        if "clashofclans" in u.lower() and u not in coc_links:
-                            coc_links.append(u)
-
-                    if not coc_links:
-                        continue
-
-                    author = tweet.get("author", {})
-                    screen_name = author.get("userName", "unknown")
-                    name = author.get("name", "Unknown")
-                    tweet_id = tweet.get("id", "")
-                    tweet_url = f"https://x.com/{screen_name}/status/{tweet_id}"
-
-                    for coc_link in coc_links:
-                        coc_link = coc_link.rstrip(".,)\"'\\")
-                        if coc_link not in seen_coc:
-                            seen_coc.add(coc_link)
-                            results.append({
-                                "coc_link": coc_link,
-                                "tweet_url": tweet_url,
-                                "author": f"{name} (@{screen_name})"
-                            })
-
-                except Exception:
-                    continue
-
-            fetched += len(tweets)
-            cursor = data.get("next_cursor")
-            if not cursor:
-                break
-
-            time.sleep(1)
-
-        except Exception as e:
-            print(f"  Request error: {e}")
-            break
-
-    print(f"  Found {len(results)} CoC base links total.")
-    return results
-
-
-def post_to_discord(items: list):
-    if not items:
-        print("No new CoC links to post.")
-        requests.post(DISCORD_WEBHOOK_URL, json={
-            "embeds": [{
-                "title": "TH18 Scraper ran — no new CoC links found",
-                "description": f"Ran at {datetime.now().strftime('%Y-%m-%d %H:%M')} UTC",
-                "color": 0x888888
-            }]
-        })
-        return
-
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    requests.post(DISCORD_WEBHOOK_URL, json={
-        "embeds": [{
-            "title": f"\U0001f3f0 TH18 Base Links \u2014 {now}",
-            "description": f"Found **{len(items)} new Clash of Clans base link(s)**",
-            "color": 0xE8D44D,
-            "footer": {"text": "th18 scraper \u2022 link.clashofclans.com"}
-        }]
-    })
-    time.sleep(0.5)
-
-    for item in items:
-        requests.post(DISCORD_WEBHOOK_URL, json={
-            "embeds": [{
-                "description": (
-                    f"**Posted by:** {item['author']}\n"
-                    f"**Tweet:** {item['tweet_url']}\n\n"
-                    f"\U0001f517 `{item['coc_link']}`\n\n"
-                    f"[Open in Clash of Clans]({item['coc_link']})"
-                ),
-                "color": 0x2ECC71,
-            }]
-        })
-        time.sleep(0.8)
-
-    print(f"  Posted {len(items)} links to Discord.")
-
-
-def main():
-    print(f"\n{'='*55}")
-    print(f"  TH18 CoC Scraper \u2014 {datetime.now():%Y-%m-%d %H:%M:%S}")
-    print(f"{'='*55}")
-
-    if not DISCORD_WEBHOOK_URL:
-        print("DISCORD_WEBHOOK_URL not set!")
-        return
-    if not TWITTER_API_KEY:
-        print("TWITTER_API_KEY not set!")
-        return
-
-    seen = load_seen()
-    all_items = scrape_coc_links()
-    new_items = [item for item in all_items if item["coc_link"] not in seen]
-    print(f"  New (not yet posted): {len(new_items)}")
-    post_to_discord(new_items)
-    seen.update(item["coc_link"] for item in new_items)
-    save_seen(seen)
-    print("  Done.\n")
+def summary(msg):
+    """One-line result, shown on the GitHub run page."""
+    print(msg)
+    if os.environ.get("GITHUB_ACTIONS"):
+        print(f"::notice title=TH18 scraper::{msg}")
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
