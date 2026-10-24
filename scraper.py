@@ -67,13 +67,21 @@ def main() -> int:
     if dry_run:
         for b in fresh:
             print(f"  {b['level']}  @{b['author_handle']}  {b['link']}")
+        summary(f"Dry run: {len(tweets)} new tweets, {len(fresh)} new bases would be posted")
         return 0
 
     records = pipeline.fingerprint_all(fresh, vision.make_embedder(os.environ.get("VISION", "1") != "0"))
     last_id = max(int(t["id"]) for t in tweets) if tweets else None
     posted = pipeline.publish(fresh, webhook, state, records, last_tweet_id=last_id)
-    print(f"posted: {len(posted)}")
+    summary(f"{len(tweets)} new tweets, posted {len(posted)} new bases")
     return 0
+
+
+def summary(msg):
+    """One-line result, shown on the GitHub run page."""
+    print(msg)
+    if os.environ.get("GITHUB_ACTIONS"):
+        print(f"::notice title=TH18 scraper::{msg}")
 
 
 if __name__ == "__main__":

@@ -69,3 +69,10 @@ python find.py screenshot.jpg
 ## Roadmap: step C (best accuracy)
 
 Detect each building on the screenshot, map it to its grid tile, and compare layouts tile by tile, which is how BaseDrop/ClashFox-style finders work. No public model covers TH18 yet, so we train our own on the pictures this bot collects (labelled once, then retrained as new buildings appear).
+
+## Contributors
+
+| | Role |
+|---|---|
+| **[Dante3750](https://github.com/Dante3750)** (Himanshu) | Creator, product direction, testing |
+| **[Claude](https://claude.com/claude-code)** (Anthropic) | Co-developer: v2 rewrite, screenshot search, tests, CI |
