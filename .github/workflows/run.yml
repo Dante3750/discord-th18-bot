@@ -2,34 +2,52 @@ name: TH18 CoC Scraper
 
 on:
   schedule:
-    - cron: '0 9 * * *'
+    - cron: '17 */6 * * *'   # every 6 hours (UTC), off the busy :00 minute
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (search only, post nothing, save nothing)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # lets the job commit data/state.json + data/bases.json back
+
+concurrency:
+  group: th18-scraper
+  cancel-in-progress: false
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 10
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
+          cache: pip
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - run: pip install -r requirements.txt pytest
+
+      - name: Tests
+        run: python -m pytest -q
 
       - name: Run scraper
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
         run: python scraper.py
 
-      - name: Save seen links
-        uses: actions/upload-artifact@v4
-        with:
-          name: seen-links
-          path: seen_links.json
-          if-no-files-found: ignore
+      - name: Save state back to repo
+        if: always() && inputs.dry_run != true
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
+          git commit -m "data: new TH18 bases [skip ci]"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push
