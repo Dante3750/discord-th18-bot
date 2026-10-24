@@ -13,14 +13,15 @@ TH18_DE = "https://link.clashofclans.com/de?action=OpenLayout&id=TH18%3AHV%3AAAA
 TH17 = "https://link.clashofclans.com/en?action=OpenLayout&id=TH17%3AWB%3AAAAAXYZ"
 
 
-def tweet(i, text="", urls=(), photo=None, retweet=False):
+def tweet(i, text="", urls=(), photo="https://pbs.twimg.com/media/default.jpg", retweet=False, photos=None):
     t = {
         "id": str(i), "text": text, "createdAt": "Tue Oct 20 07:00:30 +0000 2026", "likeCount": 3,
         "author": {"userName": f"user{i}", "name": f"User {i}"},
         "entities": {"urls": [{"expanded_url": u} for u in urls]},
     }
-    if photo:
-        t["extendedEntities"] = {"media": [{"type": "photo", "media_url_https": photo}]}
+    photos = photos if photos is not None else ([photo] if photo else [])
+    if photos:
+        t["extendedEntities"] = {"media": [{"type": "photo", "media_url_https": u} for u in photos]}
     if retweet:
         t["retweeted_tweet"] = {"id": "1"}
     return t
@@ -140,4 +141,41 @@ def test_full_run_never_reposts(tmp_path, monkeypatch):
 
 def test_default_query_shape():
     q = scraper.default_query(["TH18"])
-    assert "url:link.clashofclans.com" in q and "-filter:retweets" in q and "th18" in q and "since:" in q
+    assert "url:link.clashofclans.com" in q and "filter:images" in q and "-filter:retweets" in q and "th18" in q and "since:" in q
+
+
+# --- images required + multi-base tweets ---------------------------------------
+
+def link(n, level="TH18"):
+    return f"https://link.clashofclans.com/en?action=OpenLayout&id={level}%3AHV%3ABASE{n}"
+
+
+def test_tweet_without_picture_skipped_by_default():
+    t = tweet(40, text=link(1), photo=None)
+    assert bases_from_tweet(t, {"TH18"}) == []
+    assert len(bases_from_tweet(t, {"TH18"}, require_image=False)) == 1
+
+
+def test_four_links_four_pictures_paired_in_order():
+    pics = [f"https://p/{n}.jpg" for n in range(1, 5)]
+    t = tweet(41, urls=[link(n) for n in range(1, 5)], photos=pics)
+    bases = bases_from_tweet(t, {"TH18"})
+    assert [b["image"] for b in bases] == pics
+    assert all(b["paired"] for b in bases)
+    assert [(b["position"], b["of"]) for b in bases] == [(1, 4), (2, 4), (3, 4), (4, 4)]
+
+
+def test_mixed_levels_keep_pairing_position():
+    # TH17 base is first, so the TH18 base must still get the SECOND picture
+    t = tweet(42, urls=[link(1, "TH17"), link(2)], photos=["https://p/a.jpg", "https://p/b.jpg"])
+    (b,) = bases_from_tweet(t, {"TH18"})
+    assert b["image"] == "https://p/b.jpg" and b["paired"]
+
+
+def test_five_links_four_pictures_not_guessed():
+    pics = [f"https://p/{n}.jpg" for n in range(4)]
+    t = tweet(43, urls=[link(n) for n in range(5)], photos=pics)
+    bases = bases_from_tweet(t, {"TH18"})
+    assert len(bases) == 5
+    assert all(not b["paired"] and b["images"] == pics for b in bases)
+    assert "different base" in discord.build_embed(bases[0])["description"]

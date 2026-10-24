@@ -16,6 +16,10 @@ def build_embed(base: dict) -> dict:
         f"**[\U0001f4cb Copy this base]({base['link']})**",
         f"[View tweet]({base['tweet_url']}) · ❤️ {base['likes']}",
     ]
+    if base.get("of", 1) > 1:
+        lines.append(f"Base {base['position']} of {base['of']} in this tweet")
+    if base.get("paired") is False and len(base.get("images") or []) > 1:
+        lines.append("⚠️ Tweet has more bases than pictures — image may be a different base")
     embed = {
         "title": f"{base['level']} base — @{base['author_handle']}",
         "url": base["link"],  # tapping the title on mobile opens the layout in-game

@@ -12,6 +12,7 @@ Env vars:
   TH_LEVELS            default "TH18"  (comma list, e.g. "TH18,TH17")
   SEARCH_QUERY         override the default search query
   MAX_PAGES            default 5 (safety cap on credits per run)
+  REQUIRE_IMAGE        default 1 (skip tweets with a link but no picture; 0 = keep them)
   DRY_RUN=1            print what would be posted, change nothing
 """
 
@@ -30,7 +31,7 @@ def default_query(levels):
         n = level[2:]
         words += [level.lower(), f'"th {n}"', f"#{level.lower()}", f'"town hall {n}"']
     since = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
-    return f"({' OR '.join(words)}) url:link.clashofclans.com -filter:retweets since:{since}"
+    return f"({' OR '.join(words)}) url:link.clashofclans.com filter:images -filter:retweets since:{since}"
 
 
 def main() -> int:
@@ -40,6 +41,7 @@ def main() -> int:
     levels = {s.strip().upper() for s in os.environ.get("TH_LEVELS", "TH18").split(",") if s.strip()}
     query = os.environ.get("SEARCH_QUERY") or default_query(sorted(levels))
     max_pages = int(os.environ.get("MAX_PAGES", "5"))
+    require_image = os.environ.get("REQUIRE_IMAGE", "1") != "0"
 
     if not api_key:
         print("TWITTER_API_KEY not set"); return 1
@@ -55,7 +57,7 @@ def main() -> int:
 
     fresh, batch_ids = [], set()
     for tweet in reversed(tweets):  # oldest first, so the newest base ends up at the bottom in Discord
-        for base in bases_from_tweet(tweet, levels):
+        for base in bases_from_tweet(tweet, levels, require_image=require_image):
             if base["layout_id"] not in seen and base["layout_id"] not in batch_ids:
                 batch_ids.add(base["layout_id"])
                 fresh.append(base)

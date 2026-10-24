@@ -46,11 +46,13 @@ def _links_in(tweet: dict) -> list:
     return [u.rstrip(TRAILING_JUNK) for u in found]
 
 
-def _first_photo(tweet: dict):
-    for media in (tweet.get("extendedEntities") or {}).get("media") or []:
-        if media.get("type") == "photo" and media.get("media_url_https"):
-            return media["media_url_https"]
-    return None
+def _photos(tweet: dict) -> list:
+    """Photo URLs in the order they appear in the tweet (X allows at most 4)."""
+    return [
+        m["media_url_https"]
+        for m in (tweet.get("extendedEntities") or {}).get("media") or []
+        if m.get("type") == "photo" and m.get("media_url_https")
+    ]
 
 
 def _created_at_iso(raw):
@@ -64,27 +66,49 @@ def _created_at_iso(raw):
     return None
 
 
-def bases_from_tweet(tweet: dict, levels: set) -> list:
-    """All distinct base layouts in one tweet whose level is in `levels` (e.g. {"TH18"})."""
+def bases_from_tweet(tweet: dict, levels: set, require_image: bool = True) -> list:
+    """All distinct base layouts in one tweet whose level is in `levels` (e.g. {"TH18"}).
+
+    Image pairing for multi-base tweets ("5 links + 5 pics"):
+      - same number of links and photos -> link N gets photo N (posters list them in order)
+      - one link                        -> it gets the first photo
+      - counts differ (e.g. 5 links, but X caps photos at 4) -> we can't know which photo
+        is which base, so each base keeps all photos and is marked paired=False
+    """
     if tweet.get("retweeted_tweet"):
+        return []
+    photos = _photos(tweet)
+    if require_image and not photos:
         return []
     author = tweet.get("author") or {}
     handle = author.get("userName") or "unknown"
     tweet_id = str(tweet.get("id") or "")
-    out, seen = [], set()
+
+    layouts, seen = [], set()  # every base link in the tweet, in order, any level
     for link in _links_in(tweet):
         info = layout_from_link(link)
-        if not info:
+        if info and info[0] not in seen:
+            seen.add(info[0])
+            layouts.append((link, *info))
+
+    one_to_one = len(layouts) == len(photos) or len(layouts) == 1
+    out = []
+    for i, (link, layout_id, level) in enumerate(layouts):
+        if level not in levels:
             continue
-        layout_id, level = info
-        if level not in levels or layout_id in seen:
-            continue
-        seen.add(layout_id)
+        if one_to_one and photos:
+            image, images, paired = photos[i], [photos[i]], True
+        else:
+            image, images, paired = (photos[0] if photos else None), photos, False
         out.append({
             "layout_id": layout_id,
             "level": level,
             "link": link,
-            "image": _first_photo(tweet),
+            "image": image,
+            "images": images,
+            "paired": paired,
+            "position": i + 1,
+            "of": len(layouts),
             "tweet_id": tweet_id,
             "tweet_url": tweet.get("url") or f"https://x.com/{handle}/status/{tweet_id}",
             "author_name": author.get("name") or handle,
